@@ -1,5 +1,6 @@
 """Frozen transformer access and activation extraction."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import torch
@@ -45,7 +46,8 @@ class FrozenTransformer:
         selected = layers if layers is not None else list(range(len(hidden_states)))
         invalid = [layer for layer in selected if not 0 <= layer < len(hidden_states)]
         if invalid:
-            raise ValueError(f"layers {invalid} outside valid range 0..{len(hidden_states) - 1}")
+            last_layer = len(hidden_states) - 1
+            raise ValueError(f"layers {invalid} outside valid range 0..{last_layer}")
 
         token_ids = encoded["input_ids"][0].tolist()
         activations = {
@@ -57,3 +59,37 @@ class FrozenTransformer:
             tokens=tuple(self.tokenizer.convert_ids_to_tokens(token_ids)),
             last_token_by_layer=activations,
         )
+
+    @torch.inference_mode()
+    def next_token_logits(
+        self,
+        prompt: str,
+        write_layer: int | None = None,
+        transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    ) -> torch.Tensor:
+        """Return next-token logits, optionally transforming one block's output."""
+        if not prompt.strip():
+            raise ValueError("prompt must contain text")
+        if (write_layer is None) != (transform is None):
+            raise ValueError("write_layer and transform must be provided together")
+        if write_layer is not None and not 1 <= write_layer <= self.layer_count:
+            raise ValueError(f"write_layer must be in 1..{self.layer_count}")
+
+        encoded = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        handle = None
+        if transform is not None:
+            block = self.model.gpt_neox.layers[write_layer - 1]
+
+            def hook(_module, _inputs, output):
+                if isinstance(output, tuple):
+                    return (transform(output[0]), *output[1:])
+                return transform(output)
+
+            handle = block.register_forward_hook(hook)
+
+        try:
+            output = self.model(**encoded, return_dict=True)
+        finally:
+            if handle is not None:
+                handle.remove()
+        return output.logits[0, -1].detach().float().cpu()
