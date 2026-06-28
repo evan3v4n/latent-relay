@@ -1,5 +1,7 @@
 """Latent read/write components shared by relay experiments."""
 
+import math
+
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -11,6 +13,10 @@ def fit_direction(positive: torch.Tensor, negative: torch.Tensor) -> torch.Tenso
         raise ValueError("activation sets must have a batch dimension")
     if positive.shape[1:] != negative.shape[1:]:
         raise ValueError("activation shapes must match after the batch dimension")
+    if not positive.shape[0] or not negative.shape[0]:
+        raise ValueError("activation sets must be non-empty")
+    if not torch.isfinite(positive).all() or not torch.isfinite(negative).all():
+        raise ValueError("activations must be finite")
     direction = positive.float().mean(dim=0) - negative.float().mean(dim=0)
     if direction.ndim != 1:
         raise ValueError("fit_direction expects final-token activations")
@@ -35,6 +41,8 @@ class LatentReader(nn.Module):
         """Create a reader from a learned or otherwise supplied direction."""
         if direction.ndim != 1 or direction.numel() < 1:
             raise ValueError("direction must be a non-empty vector")
+        if not torch.isfinite(direction).all():
+            raise ValueError("direction must be finite")
         if direction.norm() == 0:
             raise ValueError("direction must be non-zero")
         reader = cls.__new__(cls)
@@ -56,21 +64,30 @@ class LatentReader(nn.Module):
 
 
 class LatentState:
-    """A scalar state that persists between independent forward passes."""
+    """Detached scalar or vector state, smoothed between independent calls."""
 
-    def __init__(self, beta: float = 0.0) -> None:
+    def __init__(self, beta: float = 0.0, latent_size: int = 1) -> None:
         if not 0 <= beta <= 1:
             raise ValueError("beta must be between 0 and 1")
+        if latent_size < 1:
+            raise ValueError("latent_size must be positive")
         self.beta = beta
-        self.z = 0.0
+        self.latent_size = latent_size
+        self.reset()
 
-    def update(self, observed: float | torch.Tensor) -> float:
-        value = float(torch.as_tensor(observed).detach())
+    def update(self, observed: float | torch.Tensor) -> float | torch.Tensor:
+        value = torch.as_tensor(observed).detach().float().cpu()
+        expected = () if self.latent_size == 1 else (self.latent_size,)
+        if value.shape != expected or not torch.isfinite(value).all():
+            raise ValueError(f"observed state must be finite with shape {expected}")
+        if (value.abs() > 1).any():
+            raise ValueError("observed state must be bounded by [-1, 1]")
+        value = float(value) if self.latent_size == 1 else value.clone()
         self.z = self.beta * self.z + (1 - self.beta) * value
         return self.z
 
     def reset(self) -> None:
-        self.z = 0.0
+        self.z = 0.0 if self.latent_size == 1 else torch.zeros(self.latent_size)
 
 
 class LatentWriter(nn.Module):
@@ -91,7 +108,11 @@ class LatentWriter(nn.Module):
             raise ValueError(
                 f"expected hidden size {self.direction.numel()}, got {hidden.shape[-1]}"
             )
+        if not math.isfinite(alpha):
+            raise ValueError("alpha must be finite")
         state = torch.as_tensor(z, device=hidden.device, dtype=hidden.dtype)
+        if state.numel() != 1 or not torch.isfinite(state).all():
+            raise ValueError("z must be a finite scalar")
         return hidden + alpha * state * self.direction.to(hidden)
 
     def forward(
