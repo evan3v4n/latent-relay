@@ -117,3 +117,20 @@ class FrozenTransformer:
         transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
     ) -> torch.Tensor:
         return self.differentiable_logits(self.encode(prompt), write_layer, transform).cpu()
+
+    @torch.inference_mode()
+    def sequence_nll(
+        self,
+        text: str,
+        write_layer: int | None = None,
+        transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    ) -> tuple[float, int]:
+        """Return (total negative log-likelihood, predicted token count) for `text`."""
+        ids = self.encode(text)
+        if ids.shape[1] < 2:
+            raise ValueError("text must contain at least two tokens")
+        with self.intervention(write_layer, transform):
+            logits = self.model(input_ids=ids, return_dict=True, use_cache=False).logits[0]
+        log_probs = logits[:-1].float().log_softmax(-1)
+        picked = log_probs.gather(1, ids[0, 1:].unsqueeze(1))
+        return float(-picked.sum()), ids.shape[1] - 1

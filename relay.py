@@ -63,6 +63,32 @@ class LatentReader(nn.Module):
         return self.read_state(hidden)
 
 
+class CalibratedReader(LatentReader):
+    """Read z = tanh((h - center) . direction / scale) so that z = 0 means "neutral".
+
+    `center` is the midpoint between the two example classes and `scale` is the spread of
+    the example projections, so typical examples land around +/-0.8 instead of saturating.
+    """
+
+    @classmethod
+    def from_examples(cls, positive: torch.Tensor, negative: torch.Tensor) -> "CalibratedReader":
+        direction = fit_direction(positive, negative)
+        center = (positive.float().mean(dim=0) + negative.float().mean(dim=0)) / 2
+        projections = torch.cat((positive, negative)).float().sub(center) @ direction
+        reader = cls.from_direction(direction)
+        reader.register_buffer("center", center)
+        reader.register_buffer("scale", projections.std().clamp_min(1e-6))
+        return reader
+
+    def read_state(self, hidden: torch.Tensor) -> torch.Tensor:
+        if hidden.shape[-1] != self.direction.numel():
+            raise ValueError(
+                f"expected hidden size {self.direction.numel()}, got {hidden.shape[-1]}"
+            )
+        projection = (hidden.float() - self.center.to(hidden.device)) @ self.direction.to(hidden.device)
+        return torch.tanh(projection / self.scale.to(hidden.device))
+
+
 class LatentState:
     """Detached scalar or vector state, smoothed between independent calls."""
 
@@ -100,6 +126,18 @@ class LatentWriter(nn.Module):
         generator = torch.Generator().manual_seed(seed)
         direction = F.normalize(torch.randn(hidden_size, generator=generator), dim=0)
         self.register_buffer("direction", direction)
+
+    @classmethod
+    def from_direction(cls, direction: torch.Tensor) -> "LatentWriter":
+        """Create a writer that pushes activations along a supplied direction."""
+        if direction.ndim != 1 or direction.numel() < 1 or not torch.isfinite(direction).all():
+            raise ValueError("direction must be a finite non-empty vector")
+        if direction.norm() == 0:
+            raise ValueError("direction must be non-zero")
+        writer = cls.__new__(cls)
+        nn.Module.__init__(writer)
+        writer.register_buffer("direction", F.normalize(direction.float(), dim=0))
+        return writer
 
     def write_state(
         self, hidden: torch.Tensor, z: float | torch.Tensor, alpha: float = 1.0
