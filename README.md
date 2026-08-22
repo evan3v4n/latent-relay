@@ -1,86 +1,110 @@
 # Latent Relay
 
-A small experimental harness that reads, persists, and writes a scalar state
-through frozen Pythia activations. Phases 0–7 now cover the relay mechanism,
-causal intervention, layer sweeps, and a first learned semantic direction.
+**Can a language model carry a memory between conversations in a single number, with no text?**
 
-The reader normalizes both its direction and each activation before projection.
-This measures directional alignment and prevents Pythia's large activation
-norms from forcing every state to `-1` or `+1`.
+Latent Relay reads one small number out of a frozen language model's internal activations
+after an interaction, throws the text away, and writes that number back into the model during a
+later, unrelated interaction. If the later output changes in a predictable way, the number carried
+information.
 
-## Run locally
+```text
+Interaction 1                                 Interaction 2 (fresh context)
+"Something amazing happened today."           "Overall, the movie turned out to be ..."
+        │                                              │
+  frozen model ──> READ ──> z = +0.8 ───────> WRITE into the model ──> more positive words
+                          (the only thing kept)
+```
 
-Python 3.10+ is recommended. The first run downloads the model (roughly 600 MB).
+Model weights are never changed. See [docs/how-it-works.md](docs/how-it-works.md) for a
+plain-language walkthrough and glossary.
+
+## Headline results
+
+On held-out sentences and held-out prompts, with controls ([full details and caveats](docs/results.md)):
+
+| | pythia-160m | pythia-410m |
+|---|---|---|
+| Sentiment direction, held-out accuracy | 91% | 97% |
+| Effect of a stored positive/negative number on a later prompt | +1.65 (CI 1.59 to 1.72) | +2.44 (CI 2.29 to 2.60) |
+| Same effect with a random write direction (control) | +0.08 | -0.07 |
+| Effect fades after unrelated turns at the set `beta` rate | yes | yes |
+| Phase 8 checks passed | 8 of 9 | 9 of 9 |
+| Learned four-code memory task, held-out recall (chance 25%) | 100% | not run |
+
+Known weak points: the 160m run goes over the fluency (perplexity) budget, and the direction
+reads emotional wording better than situations without emotion words (65% to 68% on those).
+
+## Roadmap status
+
+| Phase | What | Status |
+|---|---|---|
+| 0–2 | Trace Pythia activations, read a bounded scalar | done |
+| 3 | Smooth the state across independent interactions (`LatentState`) | done |
+| 4 | Write the state into a later layer with a temporary hook | done |
+| 5 | Compare identical prompts at z = -1, 0, +1 | done |
+| 6 | Sweep read/write layers | done |
+| 7 | Give the number a meaning (fitted sentiment direction) | done; implicit-sentiment target missed |
+| 8 | Persistent memory across interactions | done; 410m passes all checks, 160m misses fluency budget |
+| 10 (early) | Trained low-rank relay | working on a four-code memory task |
+| 9 | Multi-dimensional state | not started |
+
+## Run it
+
+Python 3.10+. The first run downloads the model (about 600 MB for 160m).
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python main.py
+
+python -m experiments.phase7_sentiment       # ~10 s: does the direction read sentiment?
+python -m experiments.phase8_persistence     # ~10 min: does a stored number steer later prompts?
+python -m experiments.memory_task            # ~40 s: learned four-code memory
+python -m unittest discover -s tests -t .    # fast tests, no model download
 ```
 
-The default experiment sweeps the layer pairs from the project outline and
-writes its effect measurements to `results/phase6.csv`.
+Add `--model EleutherAI/pythia-410m` to the Phase 7 and 8 commands to repeat them on the larger
+model. Results are written to `results/` as JSON.
 
-Change the layer pairs, strength, or prompts:
-
-```bash
-python main.py --pairs 3:3 3:8 6:8 --alpha 0.5
-python main.py --source "A quiet morning" --target "Outside, the weather was"
-```
-
-Earlier experiments remain available:
+Earlier experiments still work:
 
 ```bash
+python main.py                                       # Phase 6 layer sweep -> results/phase6.csv
 python -m experiments.inspect_activations --layers 0 4 8 12
-python -m experiments.read_latent --layer 8 --seed 42
 python -m experiments.write_latent --read-layer 12 --write-layer 8
 python -m experiments.prove_effect --write-layer 8 --alpha 1
-```
-
-`LatentReader`, `LatentState`, and `LatentWriter` are independent components.
-`FrozenTransformer.next_token_logits()` owns the temporary layer hook and always
-removes it after the forward pass. `compare_logits()` provides reusable effect
-measurements for later read/write-layer sweeps.
-
-## Roadmap status
-
-- **Phases 0–2 — complete:** load Pythia, trace hidden states, and read a bounded scalar.
-- **Phase 3 — complete:** smooth the scalar across independent interactions with `LatentState`.
-- **Phase 4 — complete:** inject the state into a later transformer block with a temporary hook.
-- **Phase 5 — complete:** compare identical prompts under `z=-1`, `0`, and `+1`.
-- **Phase 6 — complete:** sweep read/write layers and save measurements to CSV.
-- **Phase 7 — started:** fit a direction from positive/negative activation examples with `fit_direction()`.
-- **Phase 8 — started:** use `LatentRelay` for a stateful session and token generation.
-
-The next research milestone is not more plumbing: evaluate whether a learned
-direction transfers from the source prompts to held-out target prompts. Then
-compare the relay against text-only memory and a zero-state baseline, tune
-read/write layers and `alpha`, and measure persistence, usefulness, and drift.
-
-## Product shape
-
-The final product is a small stateful inference layer around a frozen language
-model. A host application keeps one `LatentRelay` per conversation. Each turn
-can be remembered, which reads the turn's activation into a compact latent
-state; later prompts are run through the same transformer with that state
-written into an internal layer. The text context remains separate from the
-latent channel, and `reset()` starts a fresh session.
-
-```text
-user turn ──> frozen transformer ──> reader ──> state z
-                                              │
-new prompt ─> frozen transformer ──> writer <─┘
-                                └──> next-token distribution ──> response
-```
-
-At production quality, the API should add a trained direction artifact,
-calibrated layer/strength settings, persistence policy, and evaluation logs.
-The current implementation deliberately keeps those choices explicit so the
-mechanism can be measured before it is packaged as a general memory system.
-
-To try the learned-direction experiment:
-
-```bash
 python -m experiments.learn_direction
 ```
+
+## Using the relay in code
+
+```python
+from model import FrozenTransformer
+from relay import CalibratedReader, LatentWriter
+from session import LatentRelay
+
+relay = LatentRelay(transformer, read_layer, write_layer,
+                    reader=reader, writer=writer, beta=0.8, alpha=alpha)
+relay.remember("Something amazing happened today.")   # reads and stores z
+relay.next_token_logits("The movie turned out to be")  # steered by z, no earlier text
+relay.generate("The movie turned out to be", max_new_tokens=20)
+relay.reset()                                          # start a fresh session
+```
+
+One `LatentRelay` per conversation. `experiments/phase8_persistence.py` shows how to fit a reader
+and writer from example sentences.
+
+## Repository map
+
+| File | Purpose |
+|---|---|
+| `model.py` | Frozen Pythia wrapper: trace activations, temporary write hook, scoring |
+| `relay.py` | Reader, writer, smoothed state, direction fitting |
+| `session.py` | `LatentRelay`: the stateful product-shaped interface |
+| `trainable.py` | Small trained read/write maps for the memory task |
+| `sentiment_data.py` | Hand-written sentences, prompts, and word lists |
+| `stats.py` | Bootstrap intervals, permutation test, AUROC |
+| `experiments/` | One script per phase |
+| `tests/` | Unit tests |
+| `outline.md` | The original project plan |
+| `docs/` | Guide and results |

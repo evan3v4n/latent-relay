@@ -40,6 +40,8 @@ Z_GRID = (-1.0, -0.5, 0.0, 0.5, 1.0)
 STRENGTH_GRID = (0.0, 0.5, 1.0, 2.0, 4.0, 8.0)
 PERSISTENCE_BETAS = (0.5, 0.8)
 PERSISTENCE_STEPS = (0, 1, 3, 5)
+DEV_NEUTRAL = data.NEUTRAL_SENTENCES[:10]     # used to pick the setting
+REPORT_NEUTRAL = data.NEUTRAL_SENTENCES[10:]  # used only to report fluency
 GENERATION_TOKENS = 20
 GENERATION_SOURCES = 3
 
@@ -149,9 +151,12 @@ def choose_config(exp, write_layers, log):
     for layer in write_layers:
         for strength in STRENGTHS:
             shift, kl = signed_shifts(exp, data.DEV_TARGETS, layer, strength, baselines)
-            grid.append({"write_layer": layer, "strength": strength, "dev_signed_shift": shift, "dev_kl": kl})
-            log(f"  dev write_layer={layer:>2} strength={strength:<4} shift={shift:+.3f} kl={kl:.3f}")
-    allowed = [row for row in grid if row["dev_kl"] <= KL_BUDGET and row["dev_signed_shift"] > 0]
+            ratio = fluency(exp, layer, strength, DEV_NEUTRAL)["worst_ratio"] if kl <= KL_BUDGET else None
+            grid.append({"write_layer": layer, "strength": strength, "dev_signed_shift": shift,
+                         "dev_kl": kl, "dev_perplexity_ratio": ratio})
+            log(f"  dev write_layer={layer:>2} strength={strength:<4} shift={shift:+.3f} kl={kl:.3f} ppl_ratio={ratio}")
+    allowed = [row for row in grid if row["dev_kl"] <= KL_BUDGET and row["dev_signed_shift"] > 0
+               and row["dev_perplexity_ratio"] <= PERPLEXITY_BUDGET]
     best = max(allowed, key=lambda row: row["dev_signed_shift"]) if allowed else min(grid, key=lambda row: row["dev_kl"])
     return best, grid
 
@@ -251,13 +256,13 @@ def persistence(exp, layer, strength, beta):
     }
 
 
-def fluency(exp, layer, strength):
+def fluency(exp, layer, strength, sentences=REPORT_NEUTRAL):
     writer, gap = exp.writer(layer)
     alpha = strength * gap
 
     def perplexity(z):
         total, count = 0.0, 0
-        for sentence in data.NEUTRAL_SENTENCES:
+        for sentence in sentences:
             if z == 0:
                 nll, n = exp.transformer.sequence_nll(sentence)
             else:
