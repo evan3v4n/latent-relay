@@ -26,6 +26,13 @@ class DataTests(unittest.TestCase):
     def test_word_lists_do_not_overlap(self):
         self.assertFalse(set(data.POSITIVE_WORDS) & set(data.NEGATIVE_WORDS))
 
+    def test_neutral_groups_are_separate(self):
+        groups = [data.NEUTRAL_CENTER, data.NEUTRAL_TURNS, data.NEUTRAL_DEV, data.NEUTRAL_REPORT]
+        flat = [sentence for group in groups for sentence in group]
+        self.assertEqual(len(flat), len(set(flat)))
+        self.assertGreaterEqual(len(data.NEUTRAL_REPORT), 20)
+        self.assertGreaterEqual(len(data.NEUTRAL_TURNS), 5)
+
     def test_split_is_disjoint_and_complete(self):
         fit, held = make_split(48, 3)
         self.assertEqual(sorted([*fit, *held]), list(range(48)))
@@ -58,6 +65,15 @@ class ReaderWriterTests(unittest.TestCase):
         self.assertTrue((reader.read_state(self.neg) < 0).all())
         midpoint = (self.pos.mean(0) + self.neg.mean(0)) / 2
         self.assertAlmostEqual(float(reader.read_state(midpoint)), 0.0, places=5)
+
+    def test_neutral_zero_point(self):
+        neutral = torch.randn(10, 16) * 0.5 + 50.0 + torch.tensor([1.0] + [0.0] * 15)
+        reader = CalibratedReader.from_examples(self.pos, self.neg, neutral)
+        self.assertAlmostEqual(float(reader.read_state(neutral.mean(0))), 0.0, places=5)
+        self.assertGreater(float(reader.read_state(self.pos).mean()), 0)
+        self.assertLess(float(reader.read_state(self.neg).mean()), 0)
+        with self.assertRaises(ValueError):
+            CalibratedReader.from_examples(self.pos, self.neg, torch.zeros(3, 8))
 
     def test_state_is_bounded_and_keeps_batch_shape(self):
         reader = CalibratedReader.from_examples(self.pos, self.neg)

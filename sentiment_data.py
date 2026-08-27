@@ -6,7 +6,9 @@ Every list is plain text so it can be read and edited without running anything.
 - IMPLICIT_*: sentiment carried only by the situation, with no obvious "feeling" words.
   These are never used to pick a layer, so they are an honest check that the direction
   tracks sentiment and not just a handful of emotion words.
-- NEUTRAL_*: sentiment-free text used as intervening turns and for the fluency check.
+- NEUTRAL_*: sentiment-free text, in four separate groups so no sentence does two jobs:
+  CENTER sets the reader's zero point, TURNS are the unrelated interactions in the persistence
+  test, DEV picks the steering strength, REPORT measures the final fluency cost.
 - TARGET_*: neutral prompts whose next word could plausibly be an opinion ("... was").
 """
 
@@ -168,7 +170,7 @@ IMPLICIT_NEGATIVE = (
     "His novel was returned by every publisher he tried.",
 )
 
-NEUTRAL_SENTENCES = (
+NEUTRAL_CENTER = (
     "The train leaves from platform four at nine.",
     "Please send the report as a PDF attachment.",
     "The library closes at six on weekdays.",
@@ -189,6 +191,61 @@ NEUTRAL_SENTENCES = (
     "The report has three sections and an appendix.",
     "The ferry crosses the harbor every half hour.",
     "He counted the boxes and wrote the total.",
+)
+
+NEUTRAL_TURNS = (
+    "The printer is on the second floor next to the supply closet.",
+    "Tickets can be collected at the front desk before noon.",
+    "The road closes for repairs between the bridge and the park.",
+    "She filed the invoices in alphabetical order.",
+    "The recipe calls for two cups of flour and a teaspoon of salt.",
+    "A new bike lane runs along the east side of the avenue.",
+)
+
+NEUTRAL_DEV = (
+    "The committee will review the budget proposal on the first of next month.",
+    "Rainfall in the valley averages about thirty inches per year.",
+    "He transferred the files from the old laptop to an external drive.",
+    "The museum is located two blocks north of the central station.",
+    "Applicants must submit a copy of their identification with the form.",
+    "The software requires at least four gigabytes of memory to run.",
+    "A freight train passes the village every morning at half past six.",
+    "The survey asked participants about their commute and working hours.",
+    "She measured the width of the window before ordering the curtains.",
+    "The lecture covers the history of the postal system in three parts.",
+    "Orders placed before two in the afternoon are shipped the same day.",
+    "The bridge is made of steel and was assembled in several sections.",
+    "He set an alarm for seven and left the keys on the table.",
+    "The conference room can seat about twenty people.",
+    "The tour begins at the main gate and ends at the harbor.",
+    "Paper receipts are stored in the cabinet for seven years.",
+    "The schedule lists three sessions on Monday and two on Tuesday.",
+    "A small team maintains the database and updates it every quarter.",
+    "The map shows the main roads and the locations of the public libraries.",
+    "The shipment contains forty boxes, each labeled with a number.",
+)
+
+NEUTRAL_REPORT = (
+    "The council will meet in the town hall on the second Thursday of each month.",
+    "Average temperatures in the region rise gradually between March and June.",
+    "She copied the contact list into a spreadsheet and sorted it by city.",
+    "The pharmacy is open from nine until five on weekdays and closed on Sundays.",
+    "Visitors must sign the register at the entrance and collect a badge.",
+    "The program stores its settings in a file inside the user directory.",
+    "A ferry service connects the island to the mainland several times a day.",
+    "The study followed two hundred households over a period of five years.",
+    "He wrote the dimensions of the room on the back of an envelope.",
+    "The course consists of twelve weekly lectures and a final written exam.",
+    "Deliveries to the warehouse are accepted on weekday mornings only.",
+    "The tower was built in the nineteenth century using local limestone.",
+    "She placed the umbrella by the door and hung her coat on the hook.",
+    "The auditorium has four hundred seats arranged in fifteen rows.",
+    "The trail follows the river for six miles before turning toward the hills.",
+    "Meeting minutes are posted on the shared drive within two days.",
+    "The timetable shows departures every twenty minutes during the day.",
+    "A volunteer group catalogs the archive and scans a few pages each week.",
+    "The atlas includes maps of each province and a list of major cities.",
+    "The invoice lists the item numbers, quantities, and unit prices.",
 )
 
 # Neutral frames x subjects. Subjects are split so test prompts use subjects never seen

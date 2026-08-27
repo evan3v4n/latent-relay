@@ -5,6 +5,10 @@ For every layer we repeatedly split the explicit sentences into a "fit" half and
 (random direction, shuffled labels) show what chance looks like. A separate set of
 implicit-sentiment sentences is never used for choosing a layer, so it is a fair check
 that the direction is not just keying on a few emotion words.
+
+The reader's zero point is the mean of separate neutral sentences, not the midpoint of the
+two example classes: the midpoint shifts for text unlike the examples (implicit sentences
+all landed on one side of it), while "neutral text reads as 0" does not.
 """
 
 import argparse
@@ -43,11 +47,11 @@ def project(hidden: torch.Tensor, direction: torch.Tensor, center: torch.Tensor)
     return ((hidden - center) @ direction).numpy()
 
 
-def score_split(pos, neg, imp_pos, imp_neg, split_seed):
+def score_split(pos, neg, imp_pos, imp_neg, neutral, split_seed):
     """All Phase 7 measurements for one layer and one random split."""
     pos_fit, pos_held = make_split(len(pos), split_seed)
     neg_fit, neg_held = make_split(len(neg), split_seed + 1000)
-    reader = CalibratedReader.from_examples(pos[pos_fit], neg[neg_fit])
+    reader = CalibratedReader.from_examples(pos[pos_fit], neg[neg_fit], neutral)
 
     def evaluate(reader, positives, negatives):
         z = reader.read_state(torch.cat((positives, negatives))).numpy()
@@ -61,7 +65,8 @@ def score_split(pos, neg, imp_pos, imp_neg, split_seed):
     rng = np.random.default_rng(split_seed + 2000)
     fit_pool = torch.cat((pos[pos_fit], neg[neg_fit]))
     mixed = rng.permutation(len(fit_pool))
-    shuffled = CalibratedReader.from_examples(fit_pool[mixed[: len(pos_fit)]], fit_pool[mixed[len(pos_fit):]])
+    shuffled = CalibratedReader.from_examples(
+        fit_pool[mixed[: len(pos_fit)]], fit_pool[mixed[len(pos_fit):]], neutral)
     shuffled_accuracy, shuffled_area = evaluate(shuffled, pos[pos_held], neg[neg_held])
 
     # Control 2: random unit directions, same centering as the real reader.
@@ -82,11 +87,11 @@ def score_split(pos, neg, imp_pos, imp_neg, split_seed):
     }
 
 
-def sweep_layers(pos_acts, neg_acts, imp_pos_acts, imp_neg_acts, layers):
+def sweep_layers(pos_acts, neg_acts, imp_pos_acts, imp_neg_acts, neutral_acts, layers):
     rows = []
     for layer in layers:
         per_split = [score_split(pos_acts[layer], neg_acts[layer], imp_pos_acts[layer],
-                                 imp_neg_acts[layer], seed) for seed in range(SPLITS)]
+                                 imp_neg_acts[layer], neutral_acts[layer], seed) for seed in range(SPLITS)]
         row = {"layer": layer}
         for key in per_split[0]:
             values = [item[key] for item in per_split]
@@ -119,8 +124,9 @@ def main():
     neg = collect_activations(transformer, data.EXPLICIT_NEGATIVE)
     imp_pos = collect_activations(transformer, data.IMPLICIT_POSITIVE)
     imp_neg = collect_activations(transformer, data.IMPLICIT_NEGATIVE)
+    neutral = collect_activations(transformer, data.NEUTRAL_CENTER)
     layers = range(1, transformer.layer_count + 1)
-    rows = sweep_layers(pos, neg, imp_pos, imp_neg, layers)
+    rows = sweep_layers(pos, neg, imp_pos, imp_neg, neutral, layers)
     best = select_read_layer(rows)
 
     print(f"{'layer':>5} {'acc':>6} {'auroc':>6} {'implicit':>9} {'shuffled':>9} {'random':>7}")

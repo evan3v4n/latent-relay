@@ -40,8 +40,11 @@ Z_GRID = (-1.0, -0.5, 0.0, 0.5, 1.0)
 STRENGTH_GRID = (0.0, 0.5, 1.0, 2.0, 4.0, 8.0)
 PERSISTENCE_BETAS = (0.5, 0.8)
 PERSISTENCE_STEPS = (0, 1, 3, 5)
-DEV_NEUTRAL = data.NEUTRAL_SENTENCES[:10]     # used to pick the setting
-REPORT_NEUTRAL = data.NEUTRAL_SENTENCES[10:]  # used only to report fluency
+# Settings are picked with a safety margin below the reported budget: fluency measured on
+# a small dev set was too optimistic about the held-out report set.
+DEV_PERPLEXITY_BUDGET = 1.15
+DEV_NEUTRAL = data.NEUTRAL_DEV         # used to pick the setting
+REPORT_NEUTRAL = data.NEUTRAL_REPORT   # used only to report fluency
 GENERATION_TOKENS = 20
 GENERATION_SOURCES = 3
 
@@ -93,8 +96,9 @@ class Experiment:
         pos_fit, pos_held = make_split(len(data.EXPLICIT_POSITIVE), 0)
         neg_fit, neg_held = make_split(len(data.EXPLICIT_NEGATIVE), 1000)
         self.pos_fit, self.neg_fit = pos_fit, neg_fit
+        self.neutral = collect_activations(transformer, data.NEUTRAL_CENTER)
         self.reader = CalibratedReader.from_examples(
-            self.pos[read_layer][pos_fit], self.neg[read_layer][neg_fit])
+            self.pos[read_layer][pos_fit], self.neg[read_layer][neg_fit], self.neutral[read_layer])
         # Interaction-1 sentences come from the held-out half: never seen when fitting.
         self.sources = {}
         for split, (pos_slice, neg_slice) in {"dev": (slice(0, 8), slice(0, 8)),
@@ -156,7 +160,7 @@ def choose_config(exp, write_layers, log):
                          "dev_kl": kl, "dev_perplexity_ratio": ratio})
             log(f"  dev write_layer={layer:>2} strength={strength:<4} shift={shift:+.3f} kl={kl:.3f} ppl_ratio={ratio}")
     allowed = [row for row in grid if row["dev_kl"] <= KL_BUDGET and row["dev_signed_shift"] > 0
-               and row["dev_perplexity_ratio"] <= PERPLEXITY_BUDGET]
+               and row["dev_perplexity_ratio"] <= DEV_PERPLEXITY_BUDGET]
     best = max(allowed, key=lambda row: row["dev_signed_shift"]) if allowed else min(grid, key=lambda row: row["dev_kl"])
     return best, grid
 
@@ -240,7 +244,7 @@ def persistence(exp, layer, strength, beta):
             relay.remember(source)
             for step in range(max(PERSISTENCE_STEPS) + 1):
                 if step:
-                    relay.remember(data.NEUTRAL_SENTENCES[step - 1])  # an unrelated turn
+                    relay.remember(data.NEUTRAL_TURNS[step - 1])  # an unrelated turn
                 if step in sums:
                     states[step].append(sign * float(relay.z))
                     sums[step].append(np.mean([sign * (exp.scorer(relay.next_token_logits(t)) - base[t])
@@ -331,7 +335,9 @@ def main():
         neg = collect_activations(transformer, data.EXPLICIT_NEGATIVE)
         ip = collect_activations(transformer, data.IMPLICIT_POSITIVE)
         ineg = collect_activations(transformer, data.IMPLICIT_NEGATIVE)
-        read_layer = select_read_layer(sweep_layers(pos, neg, ip, ineg, range(1, transformer.layer_count + 1)))
+        neutral = collect_activations(transformer, data.NEUTRAL_CENTER)
+        read_layer = select_read_layer(
+            sweep_layers(pos, neg, ip, ineg, neutral, range(1, transformer.layer_count + 1)))
     log(f"read layer: {read_layer}")
     exp = Experiment(transformer, read_layer)
 
@@ -366,7 +372,8 @@ def main():
     }.items()}
     report = {
         "model": args.model, "read_layer": read_layer, "chosen": chosen,
-        "budgets": {"kl": KL_BUDGET, "perplexity_ratio": PERPLEXITY_BUDGET},
+        "budgets": {"kl": KL_BUDGET, "perplexity_ratio": PERPLEXITY_BUDGET,
+                    "dev_perplexity_ratio": DEV_PERPLEXITY_BUDGET},
         "dev_grid": grid, "main": main_result, "dose_response": dose,
         "persistence": persist, "fluency": fluent, "generation": generated, "criteria": criteria,
     }

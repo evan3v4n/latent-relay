@@ -66,14 +66,23 @@ class LatentReader(nn.Module):
 class CalibratedReader(LatentReader):
     """Read z = tanh((h - center) . direction / scale) so that z = 0 means "neutral".
 
-    `center` is the midpoint between the two example classes and `scale` is the spread of
-    the example projections, so typical examples land around +/-0.8 instead of saturating.
+    `center` is the zero point and `scale` is the spread of the example projections, so
+    typical examples land around +/-0.8 instead of saturating. When `neutral` activations are
+    given the zero point is their mean, so neutral text reads about 0 even when the situation
+    differs from the examples; otherwise it is the midpoint between the two example classes.
     """
 
     @classmethod
-    def from_examples(cls, positive: torch.Tensor, negative: torch.Tensor) -> "CalibratedReader":
+    def from_examples(
+        cls, positive: torch.Tensor, negative: torch.Tensor, neutral: torch.Tensor | None = None
+    ) -> "CalibratedReader":
         direction = fit_direction(positive, negative)
-        center = (positive.float().mean(dim=0) + negative.float().mean(dim=0)) / 2
+        if neutral is not None:
+            if neutral.ndim != 2 or neutral.shape[0] < 1 or neutral.shape[1:] != positive.shape[1:]:
+                raise ValueError("neutral must be a non-empty [batch, hidden] activation set")
+            center = neutral.float().mean(dim=0)
+        else:
+            center = (positive.float().mean(dim=0) + negative.float().mean(dim=0)) / 2
         projections = torch.cat((positive, negative)).float().sub(center) @ direction
         reader = cls.from_direction(direction)
         reader.register_buffer("center", center)
