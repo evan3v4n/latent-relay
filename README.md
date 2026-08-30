@@ -24,15 +24,16 @@ On held-out sentences and held-out prompts, with controls ([full details and cav
 
 | | pythia-160m | pythia-410m |
 |---|---|---|
-| Sentiment direction, held-out accuracy | 91% | 97% |
-| Effect of a stored positive/negative number on a later prompt | +1.65 (CI 1.59 to 1.72) | +2.44 (CI 2.29 to 2.60) |
-| Same effect with a random write direction (control) | +0.08 | -0.07 |
+| Sentiment direction, held-out accuracy | 86% | 98% |
+| Same direction on sentences with no emotion words (target 75%) | 70% | 78% |
+| Effect of a stored positive/negative number on a later prompt | +1.03 (CI 0.95 to 1.10) | +2.48 (CI 2.34 to 2.62) |
+| Same effect with a random write direction (control) | -0.04 | -0.07 |
 | Effect fades after unrelated turns at the set `beta` rate | yes | yes |
-| Phase 8 checks passed | 8 of 9 | 9 of 9 |
+| Phase 8 checks passed | 7 of 9 | 9 of 9 |
 | Learned four-code memory task, held-out recall (chance 25%) | 100% | not run |
 
-Known weak points: the 160m run goes over the fluency (perplexity) budget, and the direction
-reads emotional wording better than situations without emotion words (65% to 68% on those).
+On the larger model everything passes. On 160m the effect is one-sided (positive states steer,
+negative ones barely do), so dose-response and generation checks fail there.
 
 ## Roadmap status
 
@@ -43,8 +44,8 @@ reads emotional wording better than situations without emotion words (65% to 68%
 | 4 | Write the state into a later layer with a temporary hook | done |
 | 5 | Compare identical prompts at z = -1, 0, +1 | done |
 | 6 | Sweep read/write layers | done |
-| 7 | Give the number a meaning (fitted sentiment direction) | done; implicit-sentiment target missed |
-| 8 | Persistent memory across interactions | done; 410m passes all checks, 160m misses fluency budget |
+| 7 | Give the number a meaning (fitted sentiment direction) | done; 410m passes all checks, 160m misses the implicit-sentiment target |
+| 8 | Persistent memory across interactions | done; 410m passes 9 of 9, 160m passes 7 of 9 |
 | 10 (early) | Trained low-rank relay | working on a four-code memory task |
 | 9 | Multi-dimensional state | not started |
 
